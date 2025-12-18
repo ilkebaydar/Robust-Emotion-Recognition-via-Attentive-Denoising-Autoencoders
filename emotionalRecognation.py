@@ -1,27 +1,31 @@
 import pandas as pd
 import numpy as np
-import lightgbm as lgb
+from sklearn.linear_model import LogisticRegression
+from sklearn.multiclass import OneVsRestClassifier
+from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import GroupKFold
 from sklearn.metrics import f1_score
 import random
 import os
 import traceback
+import warnings
 
-TOP_N_FEATURES = 50 
+warnings.filterwarnings("ignore")
 
+# --- CONFIGURATION ---
 SEED = 42
 random.seed(SEED)
 np.random.seed(SEED)
+SAFE_CORES = max(2, int(os.cpu_count() / 2))
 
-# Safe Core Calculation
-total_cores = os.cpu_count()
-SAFE_CORES = max(2, int(total_cores / 2))
+# Denenecek Tüm Adaylar
+C_CANDIDATES = [0.05, 0.1, 0.5, 1.0]
 
 print(f"--- SYSTEM CHECK ---")
-print(f"Using Safe Cores: {SAFE_CORES}")
-print(f"Target: Using Top {TOP_N_FEATURES} Features (Optimized)")
+print(f"Strategy: LASSO FACTORY (Generating file for EVERY C value)")
 
 def load_data():
+    print("Loading datasets...")
     train_df = pd.read_csv('train.csv')
     test_df = pd.read_csv('test.csv')
     return train_df, test_df
@@ -33,96 +37,74 @@ def prepare_data(train_df, test_df):
     X_test = test_df.values
     return X, y, groups, X_test
 
-def select_top_n_features(X, y, X_test, n):
-    """
-    Selects the top N features based on a quick LightGBM check.
-    """
-    print(f"\n--- Selecting Top {n} Features ---")
+def create_submission_file(test_probabilities, c_val):
+    final_preds = np.argmax(test_probabilities, axis=1)
+    df = pd.DataFrame({'ID': range(len(final_preds)), 'Predicted': final_preds})
     
-    # Quick model for feature importance
-    model = lgb.LGBMClassifier(
-        random_state=SEED, 
-        verbose=-1, 
-        n_estimators=100,
-        n_jobs=SAFE_CORES
-    )
-    model.fit(X, y)
-    
-    importances = model.feature_importances_
-    indices = np.argsort(importances)[::-1]
-    top_indices = indices[:n]
-    
-    print(f"Selection complete. Reducing from {X.shape[1]} to {n} features.")
-    
-    return X[:, top_indices], X_test[:, top_indices]
+    filename = f'submission_lasso_C{c_val}.csv'
+    df.to_csv(filename, index=False)
+    print(f" -> SAVED: '{filename}'")
 
-def train_and_evaluate(X, y, groups, X_test):
-    
-    test_predictions_accumulated = np.zeros((X_test.shape[0], 4))
-    
-    print(f"\n--- Starting Training (Group CV) with {X.shape[1]} Features ---")
+def scan_and_generate(X, y, groups, X_test):
     
     group_k_fold = GroupKFold(n_splits=5)
-    f1_scores_group = []
     
-    for fold_index, (train_idx, val_idx) in enumerate(group_k_fold.split(X, y, groups=groups)):
-        X_train, X_val = X[train_idx], X[val_idx]
-        y_train, y_val = y[train_idx], y[val_idx]
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+    X_test_scaled = scaler.transform(X_test)
+    
+    print(f"\n--- Starting Production Line ---")
+    
+    for c_val in C_CANDIDATES:
+        fold_scores = []
+        print(f"\n[Processing C={c_val}]")
+        print(f"1. Calculating CV Score...", end=" ", flush=True)
         
-        # Main Model (Tuned settings)
-        classifier = lgb.LGBMClassifier(
-            random_state=SEED, 
-            verbose=-1,
-            n_estimators=500,
-            learning_rate=0.05,
-            num_leaves=31,
+        # 1. Aşama: Cross Validation (Skoru görmek için)
+        for i, (train_idx, val_idx) in enumerate(group_k_fold.split(X, y, groups=groups)):
+            X_train, X_val = X_scaled[train_idx], X_scaled[val_idx]
+            y_train, y_val = y[train_idx], y[val_idx]
+            
+            # Hızlı hesaplama için OneVsRest + Liblinear
+            base_model = LogisticRegression(
+                C=c_val, penalty='l1', solver='liblinear', 
+                max_iter=200, random_state=SEED, verbose=0
+            )
+            clf = OneVsRestClassifier(base_model, n_jobs=1)
+            
+            clf.fit(X_train, y_train)
+            val_preds = clf.predict(X_val)
+            fold_scores.append(f1_score(y_val, val_preds, average='macro'))
+            print(".", end="", flush=True)
+        
+        avg_score = np.mean(fold_scores)
+        print(f" Done. (CV Score: {avg_score:.4f})")
+        
+        # 2. Aşama: Full Eğitim ve Dosya Oluşturma
+        print(f"2. Retraining on FULL Data & Saving...", end=" ", flush=True)
+        
+        # Final dosya için en kaliteli çözücüyü (SAGA) kullanıyoruz
+        final_clf = LogisticRegression(
+            C=c_val,
+            penalty='l1',
+            solver='saga', 
+            max_iter=2000,
+            random_state=SEED,
             n_jobs=SAFE_CORES
         )
+        final_clf.fit(X_scaled, y)
         
-        classifier.fit(X_train, y_train)
-        
-        val_preds = classifier.predict(X_val)
-        score = f1_score(y_val, val_preds, average='macro')
-        f1_scores_group.append(score)
-        
-        print(f"Fold {fold_index+1} F1-Macro: {score:.4f}")
-        
-        test_predictions_accumulated += classifier.predict_proba(X_test)
-
-    avg_score = np.mean(f1_scores_group)
-    print(f"Average Group CV Score: {avg_score:.4f}")
-    
-    return test_predictions_accumulated, avg_score
-
-def create_submission_file(test_probabilities):
-    final_class_predictions = np.argmax(test_probabilities, axis=1)
-    
-    submission_df = pd.DataFrame({
-        'ID': range(len(final_class_predictions)), 
-        'Predicted': final_class_predictions
-    })
-    
-   
-    filename = 'submission_feat_50.csv'
-    submission_df.to_csv(filename, index=False)
-    print(f"\nSubmission file ready: '{filename}'")
+        test_probs = final_clf.predict_proba(X_test_scaled)
+        create_submission_file(test_probs, c_val)
 
 if __name__ == "__main__":
     try:
         train_df, test_df = load_data()
         X, y, groups, X_test = prepare_data(train_df, test_df)
         
-        # 1. Feature Selection (Using the hardcoded best number: 50)
-        X_reduced, X_test_reduced = select_top_n_features(X, y, X_test, TOP_N_FEATURES)
+        scan_and_generate(X, y, groups, X_test)
         
-        # 2. Train & Evaluate
-        test_probs, score = train_and_evaluate(X_reduced, y, groups, X_test_reduced)
-        
-        # 3. Create File
-        create_submission_file(test_probs)
-        
-        print(f"\nFINAL RESULT: {score:.5f}")
+        print(f"\nALL JOBS COMPLETED. Check your folder!")
         
     except Exception:
-        print("\nCRITICAL ERROR:")
         traceback.print_exc()
