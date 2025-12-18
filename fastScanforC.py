@@ -17,7 +17,7 @@ np.random.seed(SEED)
 #COARSE-TO-FINE SEARCH
 #C_CANDIDATES = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0, 2.0] #COARSE-> after 0.1 score trend: downward
 #C_CANDIDATES = [0.07, 0.08] #FINE: score of 0.07 is less than 0.1, no need to try others less than 0.1
-C_CANDIDATES = [0.12, 0.14, 0.16, 0.18]  #FINE: to find better solution than 0.1
+C_CANDIDATES = [0.13, 0.15, 0.17]  #FINE: to find better solution than 0.1
 
 print(f"--- FAST SCANNER & GENERATOR  ---")
 

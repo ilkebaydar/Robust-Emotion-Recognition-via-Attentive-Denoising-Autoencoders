@@ -7,10 +7,8 @@ from sklearn.model_selection import GridSearchCV
 from sklearn.preprocessing import StandardScaler
 import warnings
 
-# --- FINAL SURGICAL OPERATION ---
-# C=0.015 gave 944 features (Too many).
-# We are dropping it to 0.003 to force it down to ~200.
-STRICT_LASSO_C = 0.003
+#lasso with C=0.008 + SVM
+STRICT_LASSO_C = 0.008
 
 warnings.filterwarnings("ignore")
 
