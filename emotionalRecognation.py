@@ -1,95 +1,76 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
+import os
 from sklearn.linear_model import LogisticRegression
 from sklearn.svm import SVC
+from sklearn.ensemble import VotingClassifier
 from sklearn.multiclass import OneVsRestClassifier
-from sklearn.model_selection import GridSearchCV
 from sklearn.preprocessing import StandardScaler
 import warnings
 
-#lasso with C=0.008 + SVM
-STRICT_LASSO_C = 0.008
-
+# --- FINAL PUSH CONFIG ---
+# Increasing C to allow more features (~850)
+LASSO_C = 0.012 
+RANDOM_STATE = 42
 warnings.filterwarnings("ignore")
 
-print(f"--- OPERATION: SVM HYBRID (SURGICAL MODE) ---")
-print(f"Step 1: Using Surgical Lasso (C={STRICT_LASSO_C})...")
+def run_hybrid_ensemble():
+    print("--- 🎯 FINAL PUSH FOR 0.42+ ---")
 
-def run_strict_hybrid():
     # 1. Load Data
-    print("Loading data...")
-    train_df = pd.read_csv('train.csv')
-    test_df = pd.read_csv('test.csv')
+    train_path, test_path = None, None
+    for dirname, _, filenames in os.walk('/kaggle/input'):
+        for filename in filenames:
+            if "train.csv" in filename: train_path = os.path.join(dirname, filename)
+            elif "test.csv" in filename: test_path = os.path.join(dirname, filename)
+
+    train_df = pd.read_csv(train_path)
+    test_df = pd.read_csv(test_path)
     
     X = train_df.iloc[:, :-2].values
     y = train_df.iloc[:, -2].values.astype(int)
     X_test = test_df.values
     
-    # 2. Scale Data
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
     X_test_scaled = scaler.transform(X_test)
-    
-    # 3. LASSO FEATURE SELECTION
-    print("Selecting features with Lasso...")
-    
-    base_lasso = LogisticRegression(
-        C=STRICT_LASSO_C, 
-        penalty='l1', 
-        solver='liblinear', 
-        random_state=42
-    )
-    
-    lasso = OneVsRestClassifier(base_lasso)
-    lasso.fit(X_scaled, y)
-    
-    # Extract coefficients
-    all_coefs = []
-    for estimator in lasso.estimators_:
-        all_coefs.append(estimator.coef_)
-    
-    coef_matrix = np.vstack(all_coefs)
-    mask = np.any(np.abs(coef_matrix) > 1e-5, axis=0)
-    n_features = np.sum(mask)
-    
-    print(f"✅ Lasso Selection Complete!")
-    print(f"   Original Features: {X.shape[1]}")
-    print(f"   Selected Features: {n_features} (Hoping for ~200)")
-    
-    if n_features == 0:
-        print("⚠️ WARNING: Too strict! No features selected.")
-        return
 
-    # Filter dataset
+    # 2. Expanded Feature Selection
+    print(f"[1] Selecting more features with C={LASSO_C}...")
+    lasso = OneVsRestClassifier(LogisticRegression(C=LASSO_C, penalty='l1', solver='liblinear', random_state=RANDOM_STATE))
+    lasso.fit(X_scaled, y)
+    mask = np.any(np.abs(np.vstack([est.coef_ for est in lasso.estimators_])) > 1e-5, axis=0)
+    
     X_subset = X_scaled[:, mask]
     X_test_subset = X_test_scaled[:, mask]
+    print(f"   ✅ Features used: {np.sum(mask)}")
+
+    # 3. Weighted Ensemble
+    print("[2] Training Weighted Hybrid SVMs...")
     
-    # 4. SVM ENGAGED
-    print("\nStep 2: Training SVM on selected features...")
+    # Model 1: Stable
+    clf1 = SVC(C=10, kernel='rbf', gamma='scale', probability=True, random_state=RANDOM_STATE)
+    # Model 2: The Champion (Weighted higher)
+    clf2 = SVC(C=50, kernel='rbf', gamma='scale', probability=True, random_state=RANDOM_STATE)
+    # Model 3: High-Gamma (Captures tighter patterns)
+    clf3 = SVC(C=25, kernel='rbf', gamma='auto', probability=True, random_state=RANDOM_STATE)
     
-    # Optimized Param Grid (Quick but effective)
-    param_grid = {
-        'C': [1, 10, 50], 
-        'gamma': ['scale', 0.01],
-        'kernel': ['rbf'] 
-    }
+    ensemble = VotingClassifier(
+        estimators=[('stable', clf1), ('champ', clf2), ('tight', clf3)],
+        voting='soft',
+        weights=[1, 2, 1], # Champion model gets double the vote
+        n_jobs=-1
+    )
     
-    svm = SVC(random_state=42)
-    grid = GridSearchCV(svm, param_grid, cv=5, scoring='f1_macro', n_jobs=-1, verbose=1)
+    ensemble.fit(X_subset, y)
     
-    grid.fit(X_subset, y)
+    # 4. Save
+    print("[3] Exporting result...")
+    preds = ensemble.predict(X_test_subset)
+    sub_file = 'submission_Hybrid_Final.csv'
+    pd.DataFrame({'ID': range(len(preds)), 'Predicted': preds}).to_csv(sub_file, index=False)
     
-    print(f"\n🏆 Best SVM Parameters: {grid.best_params_}")
-    print(f"🚀 Best Local CV Score: {grid.best_score_:.5f}")
-    
-    # 5. Generate Submission File
-    final_model = grid.best_estimator_
-    final_preds = final_model.predict(X_test_subset)
-    
-    filename = f'submission_SVM_Surgical_C{STRICT_LASSO_C}.csv'
-    df = pd.DataFrame({'ID': range(len(final_preds)), 'Predicted': final_preds})
-    df.to_csv(filename, index=False)
-    print(f"✅ FINAL FILE READY: '{filename}'")
+    print("✅ DONE! Final Hybrid approach complete.")
 
 if __name__ == "__main__":
-    run_strict_hybrid()
+    run_hybrid_ensemble()
