@@ -41,7 +41,7 @@ print(f"Device: {DEVICE}") #this is added to use kaggle's gpu
 #for result consistency I generally used cpu on VSCode environment.
 
 # Mixup - Data Augmentation: Applies by taking a linear combination of two samples
-#Args -> x(tensor): input batch features y(tensor): input batch targets aplha: param for beta distr. to sample lambda 
+#Args -> x(tensor): input batch features y(tensor): input batch targets alpha: param for beta distr. to sample lambda 
 def mixup_data(x, y, alpha=0.4):
     if alpha > 0:
         lam = np.random.beta(alpha, alpha)
@@ -396,7 +396,7 @@ def main():
     final_preds = np.argmax(final_probs, axis=1)
     
     sub = pd.DataFrame({'ID': range(len(final_preds)), 'Predicted': final_preds})
-    filename = "submission_final.csv" 
+    filename = "submission.csv" 
     sub.to_csv(filename, index=False)
     
     print(f"Final Submission Saved to: {filename}")
