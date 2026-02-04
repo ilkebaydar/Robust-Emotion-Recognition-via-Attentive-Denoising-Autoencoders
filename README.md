@@ -49,4 +49,4 @@ Due to GitHub's file size limitations, the raw `train.csv` and `test.csv` files 
 2. Place the dataset files in the root directory.
 3. Execute the script:
    ```bash
-   python emotionRecognation.py
+   python emotionRecognition.py
